@@ -72,13 +72,22 @@ class Tracker:
 
         return id_to_frame_ids, id_to_bbx_xyxys, id_sorted
 
-    def get_one_track(self, video_path):
+    def get_one_track(self, video_path,person):
         # track
         track_history = self.track(video_path)
 
         # parse track_history & use top1 track
         id_to_frame_ids, id_to_bbx_xyxys, id_sorted = self.sort_track_length(track_history, video_path)
-        track_id = id_sorted[0]
+        print ('How many people in the video?', len(id_sorted))
+        # track_id = id_sorted[0]
+        if int(person) > len(id_sorted):
+
+            # person = - 1 #get the last person if the character selected is bigger
+            person = 0 # thisis 0 because when it gets to the track_id it will be subtracted and then become -1
+        
+        print ('Person in process', person)
+        track_id = id_sorted[person-1]
+
         frame_ids = torch.tensor(id_to_frame_ids[track_id])  # (N,)
         bbx_xyxys = torch.tensor(id_to_bbx_xyxys[track_id])  # (N, 4)
 

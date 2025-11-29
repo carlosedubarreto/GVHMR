@@ -42,7 +42,10 @@ def parse_args_to_cfg():
     parser.add_argument("--video", type=str, default="inputs/demo/dance_3.mp4")
     parser.add_argument("--output_root", type=str, default=None, help="by default to outputs/demo")
     parser.add_argument("-s", "--static_cam", action="store_true", help="If true, skip DPVO")
+    parser.add_argument("-p", "--person", type=int, help="Select the person to process, starts at 0")
+    parser.add_argument("-f", "--fps", type=int, default=30, help="Select the person to process, starts at 0")
     parser.add_argument("--use_dpvo", action="store_true", help="If true, use DPVO. By default not using DPVO.")
+    parser.add_argument("--ignore_render", action="store_true", help="If true, Do not render the outputs.")
     parser.add_argument(
         "--f_mm",
         type=int,
@@ -66,7 +69,10 @@ def parse_args_to_cfg():
             f"video_name={video_path.stem}",
             f"static_cam={args.static_cam}",
             f"verbose={args.verbose}",
+            f"person={args.person}",
+            f"fps={args.fps}",
             f"use_dpvo={args.use_dpvo}",
+            f"ignore_render={args.ignore_render}",
         ]
         if args.f_mm is not None:
             overrides.append(f"f_mm={args.f_mm}")
@@ -86,7 +92,8 @@ def parse_args_to_cfg():
     Log.info(f"[Copy Video] {video_path} -> {cfg.video_path}")
     if not Path(cfg.video_path).exists() or get_video_lwh(video_path)[0] != get_video_lwh(cfg.video_path)[0]:
         reader = get_video_reader(video_path)
-        writer = get_writer(cfg.video_path, fps=30, crf=CRF)
+        # writer = get_writer(cfg.video_path, fps=30, crf=CRF)
+        writer = get_writer(cfg.video_path, fps=cfg.fps, crf=CRF)
         for img in tqdm(reader, total=get_video_lwh(video_path)[0], desc=f"Copy"):
             writer.write_frame(img)
         writer.close()
@@ -103,17 +110,20 @@ def run_preprocess(cfg):
     paths = cfg.paths
     static_cam = cfg.static_cam
     verbose = cfg.verbose
+    person = cfg.person
+    ignore_render = cfg.ignore_render
 
     # Get bbx tracking result
-    if not Path(paths.bbx).exists():
-        tracker = Tracker()
-        bbx_xyxy = tracker.get_one_track(video_path).float()  # (L, 4)
-        bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()  # (L, 3) apply aspect ratio and enlarge
-        torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
-        del tracker
-    else:
-        bbx_xys = torch.load(paths.bbx)["bbx_xys"]
-        Log.info(f"[Preprocess] bbx (xyxy, xys) from {paths.bbx}")
+    # if not Path(paths.bbx).exists():
+    tracker = Tracker()
+    # bbx_xyxy = tracker.get_one_track(video_path).float()  # (L, 4)
+    bbx_xyxy = tracker.get_one_track(video_path,person).float()  # (L, 4)
+    bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()  # (L, 3) apply aspect ratio and enlarge
+    torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
+    del tracker
+    # else:
+    #     bbx_xys = torch.load(paths.bbx)["bbx_xys"]
+    #     Log.info(f"[Preprocess] bbx (xyxy, xys) from {paths.bbx}")
     if verbose:
         video = read_video_np(video_path)
         bbx_xyxy = torch.load(paths.bbx)["bbx_xyxy"]
@@ -121,27 +131,27 @@ def run_preprocess(cfg):
         save_video(video_overlay, cfg.paths.bbx_xyxy_video_overlay)
 
     # Get VitPose
-    if not Path(paths.vitpose).exists():
-        vitpose_extractor = VitPoseExtractor()
-        vitpose = vitpose_extractor.extract(video_path, bbx_xys)
-        torch.save(vitpose, paths.vitpose)
-        del vitpose_extractor
-    else:
-        vitpose = torch.load(paths.vitpose)
-        Log.info(f"[Preprocess] vitpose from {paths.vitpose}")
+    # if not Path(paths.vitpose).exists():
+    vitpose_extractor = VitPoseExtractor()
+    vitpose = vitpose_extractor.extract(video_path, bbx_xys)
+    torch.save(vitpose, paths.vitpose)
+    del vitpose_extractor
+    # else:
+    #     vitpose = torch.load(paths.vitpose)
+    #     Log.info(f"[Preprocess] vitpose from {paths.vitpose}")
     if verbose:
         video = read_video_np(video_path)
         video_overlay = draw_coco17_skeleton_batch(video, vitpose, 0.5)
         save_video(video_overlay, paths.vitpose_video_overlay)
 
     # Get vit features
-    if not Path(paths.vit_features).exists():
-        extractor = Extractor()
-        vit_features = extractor.extract_video_features(video_path, bbx_xys)
-        torch.save(vit_features, paths.vit_features)
-        del extractor
-    else:
-        Log.info(f"[Preprocess] vit_features from {paths.vit_features}")
+    # if not Path(paths.vit_features).exists():
+    extractor = Extractor()
+    vit_features = extractor.extract_video_features(video_path, bbx_xys)
+    torch.save(vit_features, paths.vit_features)
+    del extractor
+    # else:
+    #     Log.info(f"[Preprocess] vit_features from {paths.vit_features}")
 
     # Get visual odometry results
     if not static_cam:  # use slam to get cam rotation
@@ -201,12 +211,13 @@ def load_data_dict(cfg):
 
 
 def render_incam(cfg):
-    incam_video_path = Path(cfg.paths.incam_video)
-    if incam_video_path.exists():
-        Log.info(f"[Render Incam] Video already exists at {incam_video_path}")
-        return
+    # incam_video_path = Path(cfg.paths.incam_video)
+    incam_video_path = Path(cfg.paths.incam_video+'_person-'+str(cfg.person)+".mp4")
+    # if incam_video_path.exists():
+    #     Log.info(f"[Render Incam] Video already exists at {incam_video_path}")
+    #     return
 
-    pred = torch.load(cfg.paths.hmr4d_results)
+    pred = torch.load(cfg.paths.hmr4d_results+'_person-'+str(cfg.person)+".pt")
     smplx = make_smplx("supermotion").cuda()
     smplx2smpl = torch.load("hmr4d/utils/body_model/smplx2smpl_sparse.pt").cuda()
     faces_smpl = make_smplx("smpl").faces
@@ -227,7 +238,8 @@ def render_incam(cfg):
 
     # -- render mesh -- #
     verts_incam = pred_c_verts
-    writer = get_writer(incam_video_path, fps=30, crf=CRF)
+    # writer = get_writer(incam_video_path, fps=30, crf=CRF)
+    writer = get_writer(incam_video_path, fps=cfg.fps, crf=CRF)
     for i, img_raw in tqdm(enumerate(reader), total=get_video_lwh(video_path)[0], desc=f"Rendering Incam"):
         img = renderer.render_mesh(verts_incam[i].cuda(), img_raw, [0.8, 0.8, 0.8])
 
@@ -243,13 +255,13 @@ def render_incam(cfg):
 
 
 def render_global(cfg):
-    global_video_path = Path(cfg.paths.global_video)
-    if global_video_path.exists():
-        Log.info(f"[Render Global] Video already exists at {global_video_path}")
-        return
+    global_video_path = Path(cfg.paths.global_video+'_person-'+str(cfg.person)+".mp4")
+    # if global_video_path.exists():
+    #     Log.info(f"[Render Global] Video already exists at {global_video_path}")
+    #     return
 
     debug_cam = False
-    pred = torch.load(cfg.paths.hmr4d_results)
+    pred = torch.load(cfg.paths.hmr4d_results+'_person-'+str(cfg.person)+".pt")
     smplx = make_smplx("supermotion").cuda()
     smplx2smpl = torch.load("hmr4d/utils/body_model/smplx2smpl_sparse.pt").cuda()
     faces_smpl = make_smplx("smpl").faces
@@ -295,7 +307,8 @@ def render_global(cfg):
     color = torch.ones(3).float().cuda() * 0.8
 
     render_length = length if not debug_cam else 8
-    writer = get_writer(global_video_path, fps=30, crf=CRF)
+    # writer = get_writer(global_video_path, fps=30, crf=CRF)
+    writer = get_writer(global_video_path, fps=cfg.fps, crf=CRF)
     for i in tqdm(range(render_length), desc=f"Rendering Global"):
         cameras = renderer.create_camera(global_R[i], global_T[i])
         img = renderer.render_with_ground(verts_glob[[i]], color[None], cameras, global_lights)
@@ -324,7 +337,7 @@ if __name__ == "__main__":
         pred = detach_to_cpu(pred)
         data_time = data["length"] / 30
         Log.info(f"[HMR4D] Elapsed: {Log.sync_time() - tic:.2f}s for data-length={data_time:.1f}s")
-        torch.save(pred, paths.hmr4d_results)
+        torch.save(pred, paths.hmr4d_results+'_person-'+str(cfg.person)+".pt")
 
         pred_np = {}
         pred_np['smpl_params_global'] = {}
@@ -339,12 +352,13 @@ if __name__ == "__main__":
         pred_np['smpl_params_incam']['transl'] = pred['smpl_params_global']['transl'].cpu().numpy()
         pred_np['smpl_params_incam']['betas'] = pred['smpl_params_global']['betas'].cpu().numpy()
         import pickle
-        with open(paths.hmr4d_results+".pkl", 'wb') as handle:
+        with open(paths.hmr4d_results+'_person-'+str(cfg.person)+".pkl", 'wb') as handle:
             pickle.dump(pred_np, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     # ===== Render ===== #
-    render_incam(cfg)
-    render_global(cfg)
-    if not Path(paths.incam_global_horiz_video).exists():
+    if not cfg.ignore_render:
+        render_incam(cfg)
+        render_global(cfg)
+        # if not Path(paths.incam_global_horiz_video).exists():
         Log.info("[Merge Videos]")
-        merge_videos_horizontal([paths.incam_video, paths.global_video], paths.incam_global_horiz_video)
+        merge_videos_horizontal([paths.incam_video+'_person-'+str(cfg.person)+".mp4", paths.global_video+'_person-'+str(cfg.person)+".mp4"], paths.incam_global_horiz_video+'_person-'+str(cfg.person)+".mp4")

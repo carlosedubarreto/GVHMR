@@ -24,11 +24,14 @@ output_root: outputs/demo
 output_dir: "${output_root}/${video_name}"
 preprocess_dir: ${output_dir}/preprocess
 video_path: "${output_dir}/0_input_video.mp4"
+person: 1
+fps: 30
 
 # Options
 static_cam: False
 verbose: False
 use_dpvo: False
+ignore_render: False
 f_mm: null  # focal length of fullframe camera in mm
 
 paths:
